@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -17,6 +18,7 @@ type flags struct {
 	list  bool
 	del   int
 	purge bool
+	width int
 }
 
 type Note struct {
@@ -77,11 +79,12 @@ func initDb() *sql.DB {
 	}
 
 	if !databaseExists {
-
 		wd, err := os.Getwd()
 		if err != nil {
 			log.Println(err)
 		}
+		// TODO: do some confirmation stuff here like "you are about to create a sticky db at blabla.. do you want to proceed?"
+		// doar in caz de dbPath default.. si zici ca you are about to create a DEV db at blabla!!
 		fmt.Println(blue + "Created 'sticky.db' database at: " + wd + reset)
 	}
 
@@ -89,6 +92,19 @@ func initDb() *sql.DB {
 }
 
 func listNotes(db *sql.DB) {
+	var rowCount int
+	err := db.QueryRow(`SELECT COUNT(*) FROM notes`).Scan(&rowCount)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	if rowCount != 0 {
+		// also ar trebui padding de forma "id + max_row spaces" - "note + max cat width" - "date"
+		// hmm.. dar unde pui cap de tabel? perhaps left si pad rest with spaces?
+		fmt.Println("count", rowCount)
+		fmt.Println("id - note - date maybe")
+	}
+
 	stmt, err := db.Prepare(`
 		SELECT
 			ROW_NUMBER() OVER (ORDER BY id) AS virtual_id,
@@ -107,13 +123,12 @@ func listNotes(db *sql.DB) {
 	defer rows.Close()
 
 	for rows.Next() {
-		var virtualId int
-		var note string
-		err = rows.Scan(&virtualId, &note)
+		n := new(Note)
+		err = rows.Scan(&n.VirtualID, &n.Content)
 		if err != nil {
 			log.Fatal(err)
 		}
-		fmt.Println(virtualId, note)
+		formatNote(*n, len(strconv.Itoa(rowCount)))
 	}
 
 	if err = rows.Err(); err != nil {
@@ -208,6 +223,46 @@ func delNote(noteId int, db *sql.DB) {
 	fmt.Printf("Successfully deleted note #%d\n", noteId)
 }
 
+func padString(s string, width int, before int) string {
+	ns := ""
+	if before != 0 {
+		for i := 0; i < before; i++ {
+			ns += " "
+		}
+	}
+
+	ns += s
+	for i := len(s); i < width; i++ {
+		ns += " "
+	}
+
+	return ns
+}
+
+//FIXME: the issue is.. formatul e gen "id_-" on the header, "_1-" on note, ca sa
+// fie pe acelasi formatting cu id. deci cu toate ca ai id care e len 1, tu
+// trebuie sa-l iei ca si cum e len 2 minim.
+// cba sa mai lucrez la asta this instant, but gotta think about it.
+
+// NOTE: ah but of course.. daca nu ai --headers, nici macar nu se mai aplica
+// regula asta. fun. not impossible to do, just gotta figure out how to sort
+// out the params correctly
+func formatNote(n Note, width int) {
+	sID := strconv.Itoa(n.VirtualID)
+	fmt.Printf("%s - %s\n", padString(sID, width, len(sID)), n.Content)
+}
+
+//TODO: aight.. e asa.. ai mereu headerul acelasi, dar iti trebuie sa stii ce
+// sa contina headerul. unless? nah.. iti trebuie. ca poate vrei --plain at
+// some point.
+// so.. --plain = doar content, altfel, ai id, content, date. id si content
+// default to true, date to false
+// asa caaaaa.. un formatHeader si un formatNote? pad probabil la fel peste
+// tot, dar tre sa ii dai arguments in functie de ce headers ai.
+
+// si basically si la header si la note le dai ce headers sa foloseasca
+// si in functie de aia sa formatezi
+
 func main() {
 	f := new(flags)
 	flag.StringVar(&f.add, "add", "", "add note")
@@ -215,6 +270,7 @@ func main() {
 	flag.BoolVar(&f.list, "list", false, "list all notes")
 	flag.IntVar(&f.del, "del", 0, "delete note by id")
 	flag.BoolVar(&f.purge, "purge", false, "delete notes database")
+	flag.IntVar(&f.width, "width", 0, "limit output to selected number of columns")
 	flag.Parse()
 
 	db := initDb()
